@@ -50,10 +50,35 @@ riscvrogue/
 └── game/                 # no_std roguelike library
     ├── Cargo.toml
     └── src/
-        ├── lib.rs        # main loop and rendering
+   ├── lib.rs        # demo game + exports (`prelude`)
+   ├── engine.rs     # bracket-like API (`BTerm`, `GameState`, loop)
+   ├── input.rs      # key decoding into game actions
         ├── io.rs         # `Console` trait (the kernel/game contract)
         └── map.rs        # demo map
 ```
+
+## `game` API style
+
+The `game` crate now exposes a tiny **bracket-like** API while staying
+`no_std`:
+
+- `game::engine::BTerm` – console context (`cls`, `print`, `put_char`, `key`).
+- `game::engine::GameState` – trait with `tick(&mut self, &mut BTerm)`.
+- `game::engine::main_loop` – runs a `GameState` until `TickResult::Quit`.
+- `game::dungeon::DungeonState` – procedural rooms-and-corridors sample state.
+- `game::prelude` – convenient re-exports for new game states.
+
+The current walking demo is implemented through this API, so you can replace
+`DemoState` with your own state machine incrementally.
+
+There are now two entrypoints from the `game` crate:
+
+- `game::run` – original fixed demo map.
+- `game::run_dungeon` – procedural dungeon sample state.
+- `game::run_dungeon_with_seed` – same dungeon mode with explicit RNG seed.
+
+The kernel currently calls `game::run_dungeon_with_seed` by default, using a
+boot-time hardware counter mixed with `hartid`/`dtb` for per-boot variation.
 
 ## How it boots
 
@@ -137,6 +162,10 @@ Controls:
 - Numeric keypad movement is enabled, including diagonals:
    - `7`/`9` = up-left/up-right, `1`/`3` = down-left/down-right
    - `8`/`2` = up/down, `4`/`6` = left/right
+- `O` — open/close in-game options menu.
+   - `F` cycles fonts (`IBM437 8x8 regular`, `IBM437 8x8 bold`, `IBM437 9x14 regular`).
+   - `G` toggles graphical tiles for walls/corridors/floors.
+   - `C` toggles color on/off.
 - `q` — quit. The kernel then powers the VM off via SBI.
 
 To exit QEMU at any time use `Ctrl-A` then `x`. To toggle into the QEMU

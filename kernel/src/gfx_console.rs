@@ -9,7 +9,7 @@ use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::{Baseline, Text};
-use ibm437::IBM437_8X8_REGULAR;
+use ibm437::{IBM437_8X8_BOLD, IBM437_8X8_REGULAR, IBM437_9X14_REGULAR};
 use virtio_drivers::device::gpu::VirtIOGpu;
 use virtio_drivers::device::input::{InputEvent, VirtIOInput};
 use virtio_drivers::transport::DeviceType;
@@ -19,10 +19,9 @@ use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 400;
-const CELL_W: u32 = 8;
-const CELL_H: u32 = 8;
-const COLS: usize = (WIDTH / CELL_W) as usize;
-const ROWS: usize = (HEIGHT / CELL_H) as usize;
+
+const DEFAULT_FG: Rgb888 = Rgb888::new(0xee, 0xee, 0xee);
+const DEFAULT_BG: Rgb888 = Rgb888::new(0x14, 0x14, 0x18);
 
 const MMIO_BASE: usize = 0x1000_1000;
 const MMIO_STEP: usize = 0x1000;
@@ -111,8 +110,11 @@ pub struct FramebufferConsole {
     ansi_state: AnsiState,
     cursor_x: usize,
     cursor_y: usize,
+    default_foreground: Rgb888,
+    default_background: Rgb888,
     foreground: Rgb888,
     background: Rgb888,
+    font_mode: FontMode,
     keybuf: [u8; 64],
     key_head: usize,
     key_tail: usize,
@@ -143,8 +145,11 @@ impl FramebufferConsole {
             ansi_state: AnsiState::Ground,
             cursor_x: 0,
             cursor_y: 0,
-            foreground: Rgb888::new(0xee, 0xee, 0xee),
-            background: Rgb888::new(0x14, 0x14, 0x18),
+            default_foreground: DEFAULT_FG,
+            default_background: DEFAULT_BG,
+            foreground: DEFAULT_FG,
+            background: DEFAULT_BG,
+            font_mode: FontMode::Regular8x8,
             keybuf: [0; 64],
             key_head: 0,
             key_tail: 0,
@@ -183,7 +188,8 @@ impl FramebufferConsole {
 
     fn scroll_up(&mut self) {
         let stride = (WIDTH as usize) * 4;
-        let row_bytes = stride * (CELL_H as usize);
+        let (_, cell_h) = self.cell_size();
+        let row_bytes = stride * (cell_h as usize);
         let visible_bytes = stride * (HEIGHT as usize);
         let bg = self.background;
         let fb = self.framebuffer_mut();
@@ -202,22 +208,24 @@ impl FramebufferConsole {
     fn newline(&mut self) {
         self.cursor_x = 0;
         self.cursor_y += 1;
-        if self.cursor_y >= ROWS {
-            self.cursor_y = ROWS - 1;
+        let rows = self.rows();
+        if self.cursor_y >= rows {
+            self.cursor_y = rows - 1;
             self.scroll_up();
         }
     }
 
     fn draw_char(&mut self, ch: char) {
-        if self.cursor_x >= COLS {
+        if self.cursor_x >= self.cols() {
             self.newline();
         }
 
-        let px = (self.cursor_x as i32) * (CELL_W as i32);
-        let py = (self.cursor_y as i32) * (CELL_H as i32);
+        let (cell_w, cell_h) = self.cell_size();
+        let px = (self.cursor_x as i32) * (cell_w as i32);
+        let py = (self.cursor_y as i32) * (cell_h as i32);
 
         let style = MonoTextStyleBuilder::new()
-            .font(&IBM437_8X8_REGULAR)
+            .font(self.current_font())
             .text_color(self.foreground)
             .background_color(self.background)
             .build();
@@ -284,8 +292,83 @@ impl FramebufferConsole {
     }
 
     fn csi_cursor_position(&mut self, row: usize, col: usize) {
-        self.cursor_y = row.min(ROWS.saturating_sub(1));
-        self.cursor_x = col.min(COLS.saturating_sub(1));
+        self.cursor_y = row.min(self.rows().saturating_sub(1));
+        self.cursor_x = col.min(self.cols().saturating_sub(1));
+    }
+
+    fn cols(&self) -> usize {
+        let (cell_w, _) = self.cell_size();
+        (WIDTH / cell_w) as usize
+    }
+
+    fn rows(&self) -> usize {
+        let (_, cell_h) = self.cell_size();
+        (HEIGHT / cell_h) as usize
+    }
+
+    fn cell_size(&self) -> (u32, u32) {
+        match self.font_mode {
+            FontMode::Regular8x8 | FontMode::Bold8x8 => (8, 8),
+            FontMode::Regular9x14 => (9, 14),
+        }
+    }
+
+    fn current_font(&self) -> &'static embedded_graphics::mono_font::MonoFont<'static> {
+        match self.font_mode {
+            FontMode::Regular8x8 => &IBM437_8X8_REGULAR,
+            FontMode::Bold8x8 => &IBM437_8X8_BOLD,
+            FontMode::Regular9x14 => &IBM437_9X14_REGULAR,
+        }
+    }
+
+    fn set_font_mode(&mut self, mode: FontMode) {
+        if self.font_mode != mode {
+            self.font_mode = mode;
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+            self.clear_screen();
+        }
+    }
+
+    fn apply_sgr(&mut self, params: &[u16; 4], count: usize) {
+        if count == 0 {
+            self.foreground = self.default_foreground;
+            self.background = self.default_background;
+            return;
+        }
+
+        for index in 0..count.min(params.len()) {
+            let code = params[index];
+            match code {
+                0 => {
+                    self.foreground = self.default_foreground;
+                    self.background = self.default_background;
+                }
+                30..=37 | 90..=97 => {
+                    if let Some(color) = sgr_color(code) {
+                        self.foreground = color;
+                    }
+                }
+                39 => self.foreground = self.default_foreground,
+                40..=47 | 100..=107 => {
+                    if let Some(color) = sgr_color(code - 10) {
+                        self.background = color;
+                    }
+                }
+                49 => self.background = self.default_background,
+                _ => {}
+            }
+        }
+    }
+
+    fn apply_font_command(&mut self, params: &[u16; 4], count: usize) {
+        let index = get_param(params, count, 0, 0);
+        let mode = match index {
+            1 => FontMode::Bold8x8,
+            2 => FontMode::Regular9x14,
+            _ => FontMode::Regular8x8,
+        };
+        self.set_font_mode(mode);
     }
 }
 
@@ -321,6 +404,13 @@ enum AnsiState {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FontMode {
+    Regular8x8,
+    Bold8x8,
+    Regular9x14,
+}
+
 impl FramebufferConsole {
     fn feed_ansi(&mut self, byte: u8) {
         match self.ansi_state {
@@ -330,10 +420,10 @@ impl FramebufferConsole {
                 b'\r' => self.cursor_x = 0,
                 b'\t' => {
                     let next = (self.cursor_x + 8) & !7;
-                    self.cursor_x = next.min(COLS.saturating_sub(1));
+                    self.cursor_x = next.min(self.cols().saturating_sub(1));
                 }
                 0x08 => self.cursor_x = self.cursor_x.saturating_sub(1),
-                _ if byte >= 0x20 => self.draw_char(byte as char),
+                _ if byte >= 0x20 => self.draw_char(decode_cp437(byte)),
                 _ => {}
             },
             AnsiState::Esc => {
@@ -401,9 +491,63 @@ impl FramebufferConsole {
                 let col = get_param(params, count, 1, 1).saturating_sub(1) as usize;
                 self.csi_cursor_position(row, col);
             }
+            b'm' => self.apply_sgr(params, count),
+            b'z' => self.apply_font_command(params, count),
             _ => {}
         }
     }
+}
+
+fn decode_cp437(byte: u8) -> char {
+    match byte {
+        // Box-drawing and block chars commonly used by roguelikes.
+        0xB0 => '░',
+        0xB1 => '▒',
+        0xB2 => '▓',
+        0xB3 => '│',
+        0xB4 => '┤',
+        0xBF => '┐',
+        0xC0 => '└',
+        0xC1 => '┴',
+        0xC2 => '┬',
+        0xC3 => '├',
+        0xC4 => '─',
+        0xC5 => '┼',
+        0xD9 => '┘',
+        0xDA => '┌',
+        0xDB => '█',
+        0xDC => '▄',
+        0xDD => '▌',
+        0xDE => '▐',
+        0xDF => '▀',
+        0xFA => '·',
+        0xFE => '■',
+        0xFF => '\u{00A0}',
+        _ => byte as char,
+    }
+}
+
+fn sgr_color(code: u16) -> Option<Rgb888> {
+    let color = match code {
+        30 => Rgb888::new(0x00, 0x00, 0x00),
+        31 => Rgb888::new(0xcc, 0x44, 0x44),
+        32 => Rgb888::new(0x55, 0xbb, 0x55),
+        33 => Rgb888::new(0xdd, 0xbb, 0x44),
+        34 => Rgb888::new(0x55, 0x88, 0xdd),
+        35 => Rgb888::new(0xbb, 0x66, 0xcc),
+        36 => Rgb888::new(0x44, 0xbb, 0xbb),
+        37 => Rgb888::new(0xdd, 0xdd, 0xdd),
+        90 => Rgb888::new(0x66, 0x66, 0x66),
+        91 => Rgb888::new(0xff, 0x66, 0x66),
+        92 => Rgb888::new(0x66, 0xff, 0x66),
+        93 => Rgb888::new(0xff, 0xff, 0x66),
+        94 => Rgb888::new(0x66, 0x99, 0xff),
+        95 => Rgb888::new(0xdd, 0x88, 0xff),
+        96 => Rgb888::new(0x66, 0xff, 0xff),
+        97 => Rgb888::new(0xff, 0xff, 0xff),
+        _ => return None,
+    };
+    Some(color)
 }
 
 fn get_param(params: &[u16; 4], count: usize, index: usize, default: u16) -> u16 {

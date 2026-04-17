@@ -21,7 +21,7 @@ extern crate alloc;
 #[macro_use]
 extern crate game;
 
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
 use linked_list_allocator::LockedHeap;
@@ -87,6 +87,9 @@ pub extern "C" fn kmain(hartid: usize, dtb: usize) -> ! {
     cprintln!(&mut sbi_console, "[riscvrogue]   hartid = {}", hartid);
     cprintln!(&mut sbi_console, "[riscvrogue]   dtb    = {:#x}", dtb);
 
+    let dungeon_seed = boot_seed(hartid, dtb);
+    cprintln!(&mut sbi_console, "[riscvrogue]   seed   = {:#x}", dungeon_seed);
+
     let mut gfx_console = match gfx_console::FramebufferConsole::new() {
         Ok(console) => {
             cprintln!(&mut sbi_console, "[riscvrogue] framebuffer console online");
@@ -105,10 +108,10 @@ pub extern "C" fn kmain(hartid: usize, dtb: usize) -> ! {
     // chooses to quit we shut the machine down via SBI.
     if let Some(console) = gfx_console.as_mut() {
         let console: &mut dyn Console = console;
-        game::run(console);
+        game::run_dungeon_with_seed(console, dungeon_seed);
     } else {
         let console: &mut dyn Console = &mut sbi_console;
-        game::run(console);
+        game::run_dungeon_with_seed(console, dungeon_seed);
     }
 
     cprintln!(&mut sbi_console, "\n[riscvrogue] game exited, shutting down");
@@ -139,6 +142,27 @@ unsafe fn init_heap() {
     let end = &raw mut __heap_end;
     let size = end.offset_from(start) as usize;
     HEAP.lock().init(start, size);
+}
+
+fn boot_seed(hartid: usize, dtb: usize) -> u64 {
+    let time = read_time_counter();
+    mix64(time ^ ((hartid as u64) << 32) ^ (dtb as u64))
+}
+
+fn read_time_counter() -> u64 {
+    let value: u64;
+    unsafe {
+        asm!("rdtime {}", out(reg) value);
+    }
+    value
+}
+
+fn mix64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 // -----------------------------------------------------------------------------

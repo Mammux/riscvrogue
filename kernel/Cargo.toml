@@ -35,7 +35,7 @@ virtio-drivers = "0.13"
 embedded-graphics = { version = "0.8", default-features = false }
 
 # Code Page 437 bitmap fonts (classic roguelike look).
-ibm437 = { version = "0.3", default-features = false, features = ["regular8x8"] }
+ibm437 = { version = "0.3", default-features = false, features = ["regular8x8", "bold8x8", "regular9x14"] }
 
 # The roguelike game itself.
 game = { path = "../game" }
