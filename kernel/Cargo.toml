@@ -1,0 +1,35 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal RISC-V kernel for the riscvrogue project."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+# Low-level RISC-V CSR / intrinsic access. Unused today but we will
+# reach for it as soon as we start wiring up traps and timers, and it
+# is nice to keep the dependency graph stable.
+riscv = "0.11"
+
+# Supervisor Binary Interface – used to talk to OpenSBI (the default
+# firmware QEMU boots) for console I/O, timers, shutdown, ...
+# We provide our own `_start` in assembly, so no `riscv-rt` for now.
+sbi-rt = { version = "0.0.3", features = ["legacy"] }
+
+# Synchronisation primitives that work in `no_std` / bare-metal.
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex", "lazy"] }
+
+# Simple bump-and-free heap allocator suitable for a small kernel.
+linked_list_allocator = { version = "0.10", default-features = false, features = ["use_spin"] }
+
+# The roguelike game itself.
+game = { path = "../game" }
+
+[features]
+default = []

@@ -1,0 +1,20 @@
+[package]
+name = "game"
+version = "0.1.0"
+edition = "2021"
+description = "Text-mode roguelike that runs on top of the riscvrogue kernel."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "game"
+path = "src/lib.rs"
+
+[dependencies]
+# Small deterministic PRNG that is no_std-friendly – useful once we
+# start generating dungeons. Pulled in eagerly so the dependency graph
+# is stable from the start.
+rand_core = { version = "0.6", default-features = false }
+rand_xoshiro = { version = "0.6", default-features = false }
+
+[features]
+default = []

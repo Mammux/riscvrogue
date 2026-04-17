@@ -1,0 +1,11 @@
+[toolchain]
+# Pin to a recent nightly so that we can use unstable features
+# that are convenient for bare-metal development (e.g. inline asm
+# in const contexts, naked functions, custom test frameworks, ...).
+#
+# If you prefer stable Rust, most of this project works there too;
+# just remove the `#![feature(...)]` attributes from `kernel/src/main.rs`
+# that are marked as "nightly only".
+channel = "nightly"
+components = ["rust-src", "rustfmt", "clippy", "llvm-tools-preview"]
+targets = ["riscv64gc-unknown-none-elf"]

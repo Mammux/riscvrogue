@@ -1,0 +1,51 @@
+# Default build target for the workspace: bare-metal RISC-V 64-bit.
+#
+# The `game` crate is `no_std` but architecture-independent; it builds
+# fine for this target as well, which keeps `cargo build` from the
+# workspace root working out of the box.
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+# Linker and runner configuration for the kernel.
+#
+# - `-C link-arg=-Tkernel/linker.ld` tells the linker to use our custom
+#   linker script that matches the QEMU `virt` machine's memory map.
+# - `runner` lets `cargo run -p kernel` launch QEMU directly.
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-C", "link-arg=-Tkernel/linker.ld",
+    "-C", "force-frame-pointers=yes",
+]
+#
+# Notes on the runner:
+#
+# - `-nographic` suppresses the QEMU graphical window.
+# - On Windows, plain `-serial mon:stdio` does not reliably forward
+#   keystrokes into the guest because QEMU's default stdio chardev
+#   handles signals and buffers input. Opening stdio as an explicit
+#   muxed chardev with `signal=off` makes input pass through
+#   character-by-character while still leaving `Ctrl-A x` working to
+#   quit QEMU and `Ctrl-A c` to toggle to the monitor.
+# - `mux=on` on the chardev + `-serial chardev:...` + `-mon
+#   chardev=...` share a single stdio between the serial port and
+#   the QEMU monitor.
+#
+runner = [
+    "qemu-system-riscv64",
+    "-machine", "virt",
+    "-cpu", "rv64",
+    "-smp", "1",
+    "-m", "128M",
+    "-nographic",
+    "-bios", "default",
+    "-chardev", "stdio,id=char0,mux=on,signal=off",
+    "-serial", "chardev:char0",
+    "-mon", "chardev=char0,mode=readline",
+    "-kernel",
+]
+
+# Unstable features used by the kernel build.
+# `build-std` lets us rebuild `core`/`alloc` with our panic strategy.
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

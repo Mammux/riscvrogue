@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+*.exe
+# QEMU / debugger scratch files
+*.log
+*.qcow2
+/.vscode/*.log

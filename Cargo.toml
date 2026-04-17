@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+    "game",
+]
+
+# Shared profile settings for the whole workspace.
+# The kernel is a bare-metal binary, so we want predictable code size
+# and no unwinding.
+[profile.dev]
+panic = "abort"
+opt-level = 1
+debug = true
+overflow-checks = true
+lto = false
+codegen-units = 1
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+debug = false
+lto = true
+codegen-units = 1
+strip = "symbols"
