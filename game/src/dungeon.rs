@@ -10,6 +10,29 @@ use crate::io::Console;
 
 const W: usize = 60;
 const H: usize = 30;
+
+#[derive(Clone, Copy)]
+pub struct Monster {
+    x: usize,
+    y: usize,
+    hp: i32,
+    attack: i32,
+}
+
+impl Monster {
+    fn new(x: usize, y: usize) -> Self {
+        Self {
+            x,
+            y,
+            hp: 5,
+            attack: 2,
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        self.hp > 0
+    }
+}
 const GRID_W: usize = 3;
 const GRID_H: usize = 3;
 const MIN_ROOM_W: i32 = 4;
@@ -29,6 +52,8 @@ pub struct DungeonState {
     py: usize,
     hit_points: i32,
     strength: i32,
+    xp: i32,
+    monsters: Vec<Monster>,
     options: DisplayOptions,
     font_dirty: bool,
 }
@@ -50,6 +75,8 @@ impl DungeonState {
             .map(Room::center)
             .unwrap_or((2, 2));
 
+        let monsters = spawn_monsters(&rooms, &mut rng);
+
         Self {
             tiles,
             explored: vec![false; W * H],
@@ -57,6 +84,8 @@ impl DungeonState {
             py: py as usize,
             hit_points: 20,
             strength: 10,
+            xp: 0,
+            monsters,
             options: DisplayOptions::default(),
             font_dirty: true,
         }
@@ -93,6 +122,8 @@ impl DungeonState {
 
                 if x == self.px && y == self.py {
                     self.draw_tile(ctx, b'@', 93);
+                } else if let Some(_monster) = self.monsters.iter().find(|m| m.x == x && m.y == y && m.is_alive()) {
+                    self.draw_tile(ctx, b'M', 91);
                 } else {
                     self.draw_map_tile(ctx, x, y, self.tile(x, y), visible);
                 }
@@ -101,8 +132,8 @@ impl DungeonState {
         }
 
         ctx.print("\nMove: h/j/k/l, arrows, keypad 1-9   Quit: q\n");
-        crate::cprint!(ctx.console_mut(), "HP: {}  STR: {}\n", self.hit_points, self.strength);
-        ctx.print("Press O for options\n");
+        crate::cprint!(ctx.console_mut(), "HP: {}  STR: {}  XP: {}\n", self.hit_points, self.strength, self.xp);
+        ctx.print("Press O for options");
 
         if self.options.menu_open {
             ctx.print("\n=== Options ===\n");
@@ -320,6 +351,28 @@ impl DungeonState {
         self.hit_points = (self.hit_points - amount).max(0);
     }
 
+    fn attack_monster(&mut self, monster_index: usize) {
+        if monster_index >= self.monsters.len() {
+            return;
+        }
+
+        let damage = (self.strength / 2).max(1);
+        self.monsters[monster_index].hp -= damage;
+
+        if self.monsters[monster_index].hp <= 0 {
+            self.xp += 10;
+        } else {
+            let counter_damage = self.monsters[monster_index].attack;
+            self.apply_damage(counter_damage);
+        }
+    }
+
+    fn find_monster_at(&self, x: usize, y: usize) -> Option<usize> {
+        self.monsters
+            .iter()
+            .position(|m| m.x == x && m.y == y && m.is_alive())
+    }
+
     fn on_options_key<C: Console + ?Sized>(&mut self, key: GameKey, ctx: &mut BTerm<'_, C>) -> TickResult {
         match key {
             GameKey::Quit => {
@@ -385,13 +438,20 @@ impl GameState for DungeonState {
             GameKey::Move { dx, dy } => {
                 let nx = self.px as i32 + dx;
                 let ny = self.py as i32 + dy;
-                if self.is_walkable(nx, ny) {
-                    self.px = nx as usize;
-                    self.py = ny as usize;
+                if nx < 0 || ny < 0 || nx >= W as i32 || ny >= H as i32 {
+                    TickResult::Continue
                 } else {
-                    self.apply_damage(1);
+                    let nx_usize = nx as usize;
+                    let ny_usize = ny as usize;
+
+                    if let Some(monster_index) = self.find_monster_at(nx_usize, ny_usize) {
+                        self.attack_monster(monster_index);
+                    } else if self.is_walkable(nx, ny) {
+                        self.px = nx_usize;
+                        self.py = ny_usize;
+                    }
+                    TickResult::Continue
                 }
-                TickResult::Continue
             }
             GameKey::Char(_) => TickResult::Continue,
             GameKey::Unknown => TickResult::Continue,
@@ -530,6 +590,20 @@ impl Room {
             }
         }
     }
+}
+
+fn spawn_monsters<R: RngCore>(rooms: &[Room], rng: &mut R) -> Vec<Monster> {
+    let mut monsters = Vec::new();
+
+    for room in rooms.iter() {
+        if (rng.next_u32() % 100) < 60 {
+            let x = rand_range_i32(rng, room.x1 + 1, room.x2) as usize;
+            let y = rand_range_i32(rng, room.y1 + 1, room.y2) as usize;
+            monsters.push(Monster::new(x, y));
+        }
+    }
+
+    monsters
 }
 
 fn generate_nethackish_rooms<R: RngCore>(tiles: &mut [u8], rng: &mut R) -> Vec<Room> {
