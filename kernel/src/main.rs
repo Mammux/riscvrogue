@@ -27,9 +27,11 @@ use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
 mod console;
+mod gfx_console;
 mod sbi;
 
 use console::SbiConsole;
+use game::io::Console;
 
 /// Global kernel heap. Backed by the `__heap_start`/`__heap_end`
 /// region carved out by `linker.ld`.
@@ -79,18 +81,37 @@ pub extern "C" fn kmain(hartid: usize, dtb: usize) -> ! {
         init_heap();
     }
 
-    let mut console = SbiConsole::new();
+    let mut sbi_console = SbiConsole::new();
 
-    cprintln!(&mut console, "\n[riscvrogue] kernel booted");
-    cprintln!(&mut console, "[riscvrogue]   hartid = {}", hartid);
-    cprintln!(&mut console, "[riscvrogue]   dtb    = {:#x}", dtb);
-    cprintln!(&mut console, "[riscvrogue] starting game...\n");
+    cprintln!(&mut sbi_console, "\n[riscvrogue] kernel booted");
+    cprintln!(&mut sbi_console, "[riscvrogue]   hartid = {}", hartid);
+    cprintln!(&mut sbi_console, "[riscvrogue]   dtb    = {:#x}", dtb);
+
+    let mut gfx_console = match gfx_console::FramebufferConsole::new() {
+        Ok(console) => {
+            cprintln!(&mut sbi_console, "[riscvrogue] framebuffer console online");
+            Some(console)
+        }
+        Err(error) => {
+            cprintln!(&mut sbi_console, "[riscvrogue] framebuffer init failed: {}", error);
+            cprintln!(&mut sbi_console, "[riscvrogue] falling back to SBI serial console");
+            None
+        }
+    };
+
+    cprintln!(&mut sbi_console, "[riscvrogue] starting game...\n");
 
     // Hand off to the roguelike. It runs forever; when the player
     // chooses to quit we shut the machine down via SBI.
-    game::run(&mut console);
+    if let Some(console) = gfx_console.as_mut() {
+        let console: &mut dyn Console = console;
+        game::run(console);
+    } else {
+        let console: &mut dyn Console = &mut sbi_console;
+        game::run(console);
+    }
 
-    cprintln!(&mut console, "\n[riscvrogue] game exited, shutting down");
+    cprintln!(&mut sbi_console, "\n[riscvrogue] game exited, shutting down");
     sbi::shutdown();
 }
 

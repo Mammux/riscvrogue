@@ -6,8 +6,9 @@
 //! top of the SBI legacy console.
 //!
 //! For now this is just a walking-around demo: an `@` on a small map
-//! that the player can move with `h`/`j`/`k`/`l` (vi keys) and quit
-//! with `q`. It is deliberately kept minimal – the plan is to grow it
+//! that the player can move with vi keys, arrow keys, or numpad-style
+//! directions, and quit with `q`. It is deliberately kept minimal –
+//! the plan is to grow it
 //! into a proper dungeon crawler once the kernel has enough services
 //! (timers, RNG from the platform, a framebuffer or a proper TTY).
 
@@ -25,25 +26,23 @@ use map::Map;
 /// Run the roguelike on the given console. This function never
 /// returns in normal play – the caller decides what to do when the
 /// player quits (the kernel shuts the machine down).
-pub fn run<C: Console>(console: &mut C) {
+pub fn run<C: Console + ?Sized>(console: &mut C) {
     let map = Map::demo();
     let (mut px, mut py) = map.spawn();
 
     loop {
         render(console, &map, px, py);
-        cprintln!(console, "Move: h/j/k/l   Quit: q");
+        cprintln!(console, "Move: h/j/k/l, arrows, keypad 1-9   Quit: q");
 
         let key = console.read_byte_blocking();
-        let (dx, dy) = match key {
-            b'h' => (-1, 0),
-            b'l' => (1, 0),
-            b'k' => (0, -1),
-            b'j' => (0, 1),
-            b'q' | 0x03 /* Ctrl-C */ | 0x04 /* Ctrl-D */ => {
-                cprintln!(console, "\nThanks for playing!");
-                return;
-            }
-            _ => continue,
+        if matches!(key, b'q' | 0x03 /* Ctrl-C */ | 0x04 /* Ctrl-D */) {
+            cprintln!(console, "\nThanks for playing!");
+            return;
+        }
+
+        let (dx, dy) = match movement_delta(key) {
+            Some(delta) => delta,
+            None => continue,
         };
 
         let nx = px as i32 + dx;
@@ -55,7 +54,21 @@ pub fn run<C: Console>(console: &mut C) {
     }
 }
 
-fn render<C: Console>(console: &mut C, map: &Map, px: usize, py: usize) {
+fn movement_delta(key: u8) -> Option<(i32, i32)> {
+    match key {
+        b'h' | b'4' => Some((-1, 0)),
+        b'l' | b'6' => Some((1, 0)),
+        b'k' | b'8' => Some((0, -1)),
+        b'j' | b'2' => Some((0, 1)),
+        b'y' | b'7' => Some((-1, -1)),
+        b'u' | b'9' => Some((1, -1)),
+        b'b' | b'1' => Some((-1, 1)),
+        b'n' | b'3' => Some((1, 1)),
+        _ => None,
+    }
+}
+
+fn render<C: Console + ?Sized>(console: &mut C, map: &Map, px: usize, py: usize) {
     // Clear screen + home cursor using ANSI escapes. The QEMU serial
     // console understands these.
     console.write_str("\x1b[2J\x1b[H");

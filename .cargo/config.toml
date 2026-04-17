@@ -19,16 +19,11 @@ rustflags = [
 #
 # Notes on the runner:
 #
-# - `-nographic` suppresses the QEMU graphical window.
-# - On Windows, plain `-serial mon:stdio` does not reliably forward
-#   keystrokes into the guest because QEMU's default stdio chardev
-#   handles signals and buffers input. Opening stdio as an explicit
-#   muxed chardev with `signal=off` makes input pass through
-#   character-by-character while still leaving `Ctrl-A x` working to
-#   quit QEMU and `Ctrl-A c` to toggle to the monitor.
-# - `mux=on` on the chardev + `-serial chardev:...` + `-mon
-#   chardev=...` share a single stdio between the serial port and
-#   the QEMU monitor.
+# - We now run with a graphical display and VirtIO GPU/input devices.
+# - The game renders into a framebuffer (virtio-gpu) and reads keys
+#   from virtio-input. SBI UART is retained only for debug output.
+# - Stdio remains attached to the QEMU monitor + serial mux so we can
+#   still use `Ctrl-A x` to quit from terminal sessions.
 #
 runner = [
     "qemu-system-riscv64",
@@ -36,8 +31,9 @@ runner = [
     "-cpu", "rv64",
     "-smp", "1",
     "-m", "128M",
-    "-nographic",
     "-bios", "default",
+    "-device", "virtio-gpu-device",
+    "-device", "virtio-keyboard-device",
     "-chardev", "stdio,id=char0,mux=on,signal=off",
     "-serial", "chardev:char0",
     "-mon", "chardev=char0,mode=readline",

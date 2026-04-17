@@ -7,9 +7,9 @@ long-term goal is to boot the same kernel on real RISC-V hardware (e.g. a
 VisionFive 2, a Milk-V Duo/Mars, or a SiFive HiFive board) with as few
 platform-specific changes as possible.
 
-> Status: **early scaffolding.** The kernel boots, prints a banner over the
-> SBI legacy console, and drops the player into a tiny walking-around demo
-> map. Almost everything else is still to come.
+> Status: **early prototype.** The kernel boots, initializes a VirtIO GPU
+> framebuffer and VirtIO keyboard device, then runs the roguelike in QEMU's
+> graphical window. SBI serial is kept as a debug/fallback console.
 
 ## Goals
 
@@ -29,7 +29,7 @@ platform-specific changes as possible.
 
 - Multi-user / multi-process support.
 - Loading ELF binaries from disk. The game is linked into the kernel image.
-- A full filesystem, TCP/IP stack, or graphical output.
+- A full filesystem or TCP/IP stack.
 - Security boundaries between the game and the kernel.
 
 ## Repository layout
@@ -45,7 +45,8 @@ riscvrogue/
 │   └── src/
 │       ├── main.rs       # _start shim + kmain + panic handler
 │       ├── sbi.rs        # thin wrappers over OpenSBI
-│       └── console.rs    # SBI-backed Console implementation
+│       ├── console.rs    # SBI-backed Console implementation
+│       └── gfx_console.rs# VirtIO GPU+input framebuffer Console
 └── game/                 # no_std roguelike library
     ├── Cargo.toml
     └── src/
@@ -63,11 +64,14 @@ riscvrogue/
    boot stack reserved by the linker script and calls `kmain`.
 4. `kmain` zeroes `.bss`, initialises the heap with
    [`linked_list_allocator`](https://crates.io/crates/linked_list_allocator),
-   prints a banner, and hands control to `game::run`.
-5. `game::run` takes a `&mut dyn Console` and loops forever — reading a key
-   via SBI's legacy `console_getchar`, updating state, redrawing the map
-   with ANSI escapes.
-6. When the player quits, the kernel asks OpenSBI to shut the machine down
+   prints a banner on SBI serial, then probes VirtIO-MMIO for GPU + keyboard.
+5. If VirtIO init succeeds, `game::run` receives a framebuffer-backed
+   `Console`: ANSI bytes are interpreted by a tiny in-kernel parser and drawn
+   via `embedded-graphics` + IBM437 glyphs into a `640x400` ARGB framebuffer.
+6. Keyboard input is read from `virtio-input` evdev events and translated to
+   ASCII for the game loop.
+7. If VirtIO init fails, the kernel falls back to the SBI serial console.
+8. When the player quits, the kernel asks OpenSBI to shut the machine down
    via the System Reset extension.
 
 ## Crates used
@@ -78,11 +82,14 @@ riscvrogue/
 | [`riscv`](https://crates.io/crates/riscv) | Safe wrappers around RISC-V CSRs and instructions (used as traps/timers are added). |
 | [`linked_list_allocator`](https://crates.io/crates/linked_list_allocator) | Kernel heap. |
 | [`spin`](https://crates.io/crates/spin) | `no_std` mutexes / lazy statics. |
+| [`virtio-drivers`](https://crates.io/crates/virtio-drivers) | VirtIO MMIO transports + GPU/input drivers. |
+| [`embedded-graphics`](https://crates.io/crates/embedded-graphics) | Rendering text glyphs into the framebuffer. |
+| [`ibm437`](https://crates.io/crates/ibm437) | 8x8 CP437 bitmap font used by the text console. |
 | [`rand_core`](https://crates.io/crates/rand_core) + [`rand_xoshiro`](https://crates.io/crates/rand_xoshiro) | Deterministic PRNG for dungeon generation. |
 
 More will be added as the kernel grows (`fdt` for device-tree parsing,
-`uart_16550` or a custom driver for real UARTs, `embedded-hal` for board
-portability, etc.).
+`uart_16550` or a custom driver for real UARTs, interrupt/PLIC support,
+paging, etc.).
 
 ## Prerequisites
 
@@ -110,44 +117,42 @@ cargo build -p kernel
 cargo run -p kernel
 ```
 
-You should see something like:
+You should see:
+
+- A QEMU graphical window that renders the roguelike map.
+- SBI debug lines in the launching terminal, similar to:
 
 ```
 [riscvrogue] kernel booted
 [riscvrogue]   hartid = 0
 [riscvrogue]   dtb    = 0x...
+[riscvrogue] framebuffer console online
 [riscvrogue] starting game...
-
-riscvrogue -- a roguelike on bare-metal RISC-V
-
-########################################
-#@.....................................#
-#....######.........................####
-...
-Move: h/j/k/l   Quit: q
 ```
 
 Controls:
 
-- `h` / `j` / `k` / `l` — move west / south / north / east (vi keys).
-- `q`, `Ctrl-C`, or `Ctrl-D` — quit. The kernel will then power the
-  (virtual) machine off.
+- Click the QEMU window once so it captures keyboard focus.
+- `h` / `j` / `k` / `l` **or arrow keys** — cardinal movement.
+- Numeric keypad movement is enabled, including diagonals:
+   - `7`/`9` = up-left/up-right, `1`/`3` = down-left/down-right
+   - `8`/`2` = up/down, `4`/`6` = left/right
+- `q` — quit. The kernel then powers the VM off via SBI.
 
 To exit QEMU at any time use `Ctrl-A` then `x`. To toggle into the QEMU
 monitor use `Ctrl-A` then `c` (and the same shortcut to toggle back).
 
-> Note on Windows: the runner in `.cargo/config.toml` opens stdio as an
-> explicit muxed chardev with `signal=off`, which is what makes single
-> keystrokes (h/j/k/l/q) reach the guest on `cmd.exe` and PowerShell.
-> The simpler `-serial mon:stdio` form works on Linux/macOS but swallows
-> input on Windows terminals.
+> Input now comes from `virtio-keyboard-device` in the QEMU window, not from
+> host terminal stdin. The terminal serial console remains for logs, monitor,
+> and panic output.
 
 ## Debugging with GDB
 
 ```powershell
 # Terminal 1: launch QEMU paused, waiting for a debugger on :1234
 qemu-system-riscv64 -machine virt -cpu rv64 -smp 1 -m 128M -nographic `
-    -serial mon:stdio -bios default -s -S `
+   -bios default -device virtio-gpu-device -device virtio-keyboard-device `
+   -serial mon:stdio -s -S `
     -kernel target/riscv64gc-unknown-none-elf/debug/kernel
 
 # Terminal 2:

@@ -28,6 +28,15 @@ spin = { version = "0.9", default-features = false, features = ["mutex", "spin_m
 # Simple bump-and-free heap allocator suitable for a small kernel.
 linked_list_allocator = { version = "0.10", default-features = false, features = ["use_spin"] }
 
+# VirtIO transports and device drivers (gpu + input).
+virtio-drivers = "0.13"
+
+# Tiny 2D drawing primitives and text rendering over a raw framebuffer.
+embedded-graphics = { version = "0.8", default-features = false }
+
+# Code Page 437 bitmap fonts (classic roguelike look).
+ibm437 = { version = "0.3", default-features = false, features = ["regular8x8"] }
+
 # The roguelike game itself.
 game = { path = "../game" }
 
